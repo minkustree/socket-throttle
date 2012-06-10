@@ -8,16 +8,29 @@ import socket
 import sys
 from time import time, sleep
 
-class ThrottledSocket(socket.socket):
-    _debug = True;
-    max_bps = 1024
+class ThrottledSocket(object):
+    
+    def __init__(self, wrappedsock):
+        # Was: self._sock = sock
+        # but this would have triggered setattr, so acheive the same effect: 
+        self.__dict__['_wrappedsock'] = wrappedsock
+        self.__dict__['_debug'] = True
+        self.__dict__['max_bps'] = 1024
+
+        
+    def __getattr__(self, attr):
+        return getattr(self._wrappedsock, attr)
+    
+    def __setattr__(self, attr, value):
+        return setattr(self._wrappedsock, attr, value)       
+    
     
     def recv(self, *args):
         start = time()
-        buf = super(socket_throttle, self).recv(*args)
+        buf = self._wrappedsock.recv(*args)
         end = time()
-        expected_end = start + (len(buf) * 8 * self.max_bps)
-        if _debug:
+        expected_end = start + (len(buf) * 8 / self.max_bps)
+        if self._debug:
             print "Actual: received %s bytes in %s seconds: rate=%sbps" % (
                 len(buf), 
                 end - start,
@@ -26,25 +39,18 @@ class ThrottledSocket(socket.socket):
             # assume negligable time between end and here, and that additional
             # calls to time() may end up being more lengthly than the logic
             # to determine how long to sleep for.
-            if _debug:
-                print "  Sleeping % s seconds" % (len(buf), end - start)
-            sleep(end - expected_end)
-        if _debug:
+            if self._debug:
+                print "  Sleeping % s seconds" % (expected_end - end)
+            # TODO: Protect from negative sleeps?    
+            sleep(expected_end - end)
+        if self._debug:
             now = time()
             print "  Effective: received %s bytes in %s seconds: rate=%sbps" % (
             len(buf), 
             now - start,
-            len(buf) * 8 / (now-start) ) 
+            len(buf) * 8 / (now-start) )
+        return buf 
 
-        
-    def dup(self):
-        """
-        dup() -> throttled socket object
-
-        Return a new throtttled socket object connected to the same system 
-        resource.
-        """
-        return ThrottledSocket(_sock=self._sock)
     
     def makefile(self, mode='r', bufsize=-1):
         """makefile([mode[, bufsize]]) -> file object
@@ -56,10 +62,13 @@ class ThrottledSocket(socket.socket):
         TODO: Better doc for this
         """
         return socket._fileobject(self, mode, bufsize)
+    
+def make_throttled_socket(*args, **kwargs):
+    return ThrottledSocket(socket._realsocket(*args, **kwargs))
         
 def patch():        
     # monkey patch socket to use this type of socket for everything
-    socket.socket = ThrottledSocket
+    socket.socket = make_throttled_socket
     socket.SocketType = ThrottledSocket
 
 if __name__ == '__main__':

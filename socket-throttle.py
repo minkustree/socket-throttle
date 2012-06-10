@@ -45,6 +45,17 @@ class ThrottledSocket(socket.socket):
         resource.
         """
         return ThrottledSocket(_sock=self._sock)
+    
+    def makefile(self, mode='r', bufsize=-1):
+        """makefile([mode[, bufsize]]) -> file object
+
+        Return a regular file object corresponding to the socket.  The mode
+        and bufsize arguments are as for the built-in open() function.
+        
+        File object wraps this socket, not the underlying socket implementation.
+        TODO: Better doc for this
+        """
+        return socket._fileobject(self, mode, bufsize)
         
 def patch():        
     # monkey patch socket to use this type of socket for everything

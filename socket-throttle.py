@@ -10,14 +10,20 @@ from time import time, sleep
 
 class ThrottledSocket(object):
     
-    def __init__(self, wrappedsock):
+    def __init__(self, wrappedsock, rx_bps_max = 10 * 1024):
+        '''
+        rx_bps_max: Maximum number of bits per second to receive, above which 
+                    we attempt to throttle. Algorithm is such that rate can not
+                    be precisely guaranteed. Defaults to 10240 ( = 10 Kbps) 
+        '''
         # Was: self._sock = sock
         # but this would have triggered setattr, so acheive the same effect: 
         self.__dict__['_wrappedsock'] = wrappedsock
         self.__dict__['_debug'] = False
-        # make sure this is a float, otherwise integer arithmetic rounds all
-        # of our expected durations to 0
-        self.__dict__['max_bps'] = 10 * 1024 # 10 kbps
+        # We convert to bytes to make maths a little quicker in the middle
+        # of the recv call. Div by 8.0 not 8 to ensure a float. If integer, 
+        # all our expected durations get rounded to integer values.
+        self.__dict__['max_bytes_per_sec'] = rx_bps_max / 8.0
 
     def __getattr__(self, attr):
         return getattr(self._wrappedsock, attr)
@@ -30,16 +36,16 @@ class ThrottledSocket(object):
         start = time()
         buf = self._wrappedsock.recv(*args)
         end = time()
-        expected_end = start + ((len(buf) * 8) / self.max_bps )
+        expected_end = start + (len(buf) / self.max_bytes_per_sec)
         if self._debug:
             duration = end - start
             if duration == 0:
                 rate = "infinite"
             else:
-                rate = len(buf) * 8 / duration 
+                rate = len(buf) / duration / 1024
             print "Start: %s, End: %s, Expected end: %s" % (start, end,
                 expected_end)
-            print "Actual: received %s bytes in %s seconds: rate=%sbps" % (
+            print "Actual: received %s bytes in %s seconds: rate=%sKB/s" % (
                 len(buf), duration, rate ) 
         if expected_end > end: # only sleep if recv was quicker than expected
             # assume negligable time between end and here, and that additional
@@ -55,8 +61,8 @@ class ThrottledSocket(object):
             if duration == 0:
                 rate = "infinite"
             else:
-                rate = len(buf) * 8 / duration
-            print "Effective: received %s bytes in %s seconds: rate=%sbps" % (
+                rate = len(buf) / duration / 1024
+            print "Effective: received %s bytes in %s seconds: rate=%sKB/s" % (
                 len(buf), duration, rate )
         return buf 
 
@@ -73,9 +79,16 @@ class ThrottledSocket(object):
         return socket._fileobject(self, mode, bufsize)
     
 def make_throttled_socket(*args, **kwargs):
-    return ThrottledSocket(socket._realsocket(*args, **kwargs))
+    ''' 
+    Create a wrapped _realsocket that throttles received data rate to 5KB/s
+    '''
+    return ThrottledSocket(socket._realsocket(*args, **kwargs), 5 * 8 * 1024)
         
-def patch():        
+def patch():
+    '''
+    Monkey patch socket to ensure that all new sockets created are throttled
+    sockets.
+    '''
     # monkey patch socket to use this type of socket for everything
     socket.socket = make_throttled_socket
     socket.SocketType = ThrottledSocket
@@ -91,6 +104,6 @@ if __name__ == '__main__':
     start = time()
     data = response.read()
     end = time()
-    print "Response %s bytes in %s sec (%s kbps)" % (len(data), end-start, 
-        len(data) * 8.0 / (end-start) /1024)
+    print "Response %s bytes in %s sec (%sKB/s)" % (len(data), end-start, 
+        len(data) / (end-start) /1024)
     
